@@ -1,0 +1,601 @@
+<!DOCTYPE html>
+<html lang="zh-CN"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>表格 AI Agent 的 Harness / Skill / 评估方法调研</title>
+<style>
+:root{--bg:#0f1115;--card:#171a21;--card2:#1d212b;--bd:#2a2f3a;--fg:#e6e9ef;--mut:#9aa3b2;--ac:#5b9bd5;--ok:#70ad47;--code:#c0b7ff}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.8 -apple-system,"PingFang SC","Microsoft YaHei",Segoe UI,Roboto,sans-serif}
+.wrap{max-width:980px;margin:0 auto;padding:40px 24px 100px}
+h1{font-size:28px;margin:0 0 14px;letter-spacing:.3px}
+h2{font-size:21px;margin:46px 0 14px;padding-left:12px;border-left:4px solid var(--ac)}
+h3{font-size:16.5px;margin:26px 0 8px;color:#cfd6e4}
+code{font-family:"JetBrains Mono",Consolas,monospace;font-size:12.5px;color:var(--code);background:#141821;padding:1px 5px;border-radius:4px}
+pre{background:#141821;border:1px solid var(--bd);border-radius:10px;padding:14px 16px;overflow:auto}
+pre code{background:none;padding:0;color:#cfd6e4}
+table{width:100%;border-collapse:collapse;margin:14px 0;font-size:13px}
+th,td{border:1px solid var(--bd);padding:9px 11px;text-align:left;vertical-align:top}
+th{background:var(--card2);color:#cfd6e4;font-weight:600}
+blockquote{margin:12px 0;padding:10px 16px;border-left:3px solid var(--ac);background:#141821;color:#cfd6e4;border-radius:0 8px 8px 0}
+blockquote p{margin:5px 0}
+a{color:var(--ac);word-break:break-all}
+hr{border:0;border-top:1px solid var(--bd);margin:34px 0}
+ul,ol{padding-left:24px}
+li{margin:4px 0}
+strong{color:#fff}
+</style></head>
+<body><div class="wrap">
+<h1 id="ai-agent-harness-skill">表格 AI Agent 的 Harness / Skill / 评估方法调研</h1>
+<blockquote>
+<p>面向 某表格 Agent 产品 线上 query 自动化评估与「表格大数据处理」方向的可复现深度调研
+查阅日期：2026-10-15 · 工具：WebSearch 发现 + curl 取证（WebFetch 在本环境被域名校验拦截，未使用）
+取证原则：每条结论附【来源 + 链接 + 逐字原文】；原文均 curl 实抓，不可核验处标「原文片段不完整」，不编造链接与原文。</p>
+</blockquote>
+<hr />
+<h2 id="_1">一、执行摘要</h2>
+<p>表格 Agent 领域在 2025–2026 出现三条清晰的技术收敛线：</p>
+<ol>
+<li>
+<p><strong>Harness 从「让 LLM 写通用 Python」转向「把电子表格语义封装成专用工具」。</strong> 最先进的 Spreadsheet-RL 用 <code>find_cells / inspect_range / fill_formula / recalculate_and_read</code> 等电子表格原生动作替代裸 Python，并强制 <strong>inspect→modify→verify</strong> 的闭环；SheetCopilot 的「atomic action 虚拟 API」、SheetMind 的 BNF 文法约束命令都是同一思路——<strong>用受约束的结构化动作换取可验证性</strong>。工具调用协议则三分天下：MCP（sv-excel-agent）、Office.js（PISTA、Claude for Excel 生产版）、Python sandbox（SheetAgent、Eino）。</p>
+</li>
+<li>
+<p><strong>Skill 已经标准化为单一格式：<code>SKILL.md</code>（YAML frontmatter + Markdown 正文）。</strong> Anthropic 定义、发布在 agentskills.io，微软 Copilot in Excel 与开源 pi-for-excel <strong>逐字采用</strong>（"must follow the industry standard format"）。分歧只在<strong>作用域与 IO</strong>：Anthropic <code>xlsx</code> 是「文件进文件出」的产出型 skill（并用 <code>recalc.py</code> 的 JSON 状态做公式零错误契约），微软/pi 是操作活动工作簿的「应用内」skill（@mention 触发、session/workbook 作用域）。</p>
+</li>
+<li>
+<p><strong>评估分三大流派：</strong>（a）<strong>执行 + 单元格比对 / online-judge</strong>（SpreadsheetBench v1、SB2 非可视化、WTM-BENCH 公式结果）——可复现、靠公式等价做容差；（b）<strong>加权结构匹配</strong>非单元格产物（WTM-BENCH 对图表/透视表/条件格式用 Jaccard 给部分分）；（c）<strong>LLM/VLM-as-judge + rubric</strong>（SB2 可视化用 GLM-4.6V 二值判定；WorkstreamBench 整簿用经校验的 agentic judge，0.90 准确率）。多模态（图表）是最大分水岭：<strong>SB2 用 VLM 判、WTM-BENCH 刻意不用 VLM 改走结构匹配</strong>。</p>
+</li>
+</ol>
+<p><strong>对 某表格 Agent 产品 的核心启示</strong>：线上 query 评估应<strong>双档拆分</strong>——可判定档复用 SB2/WTM 的「锚点单元格 + 公式等价容差」做确定性自动判分，开放档复用 WorkstreamBench 式「经人工标注校准的 rubric + LLM-judge」，并像 SB2 一样把图表单独走 VLM-judge。详见第八节。</p>
+<h2 id="_2">二、调研范围与来源说明</h2>
+<ul>
+<li><strong>范围</strong>：表格（Excel/电子表格）AI Agent 的 ① Harness（执行框架/工具协议/多轮机制）、② Skill（可复用配方/模板/schema/能力封装）、③ 评估方法（benchmark/grader/任务分类/可复现性），每类 ≥3 独立来源。</li>
+<li><strong>关键词</strong>：spreadsheet agent, Excel agent, harness, tool-use, MCP, Office.js, benchmark, grader, evaluation, SKILL.md。</li>
+<li><strong>来源优先级</strong>：学术论文（arXiv）&gt; 开源代码（GitHub）&gt; 数据集/模型（HuggingFace）&gt; 官方文档（Microsoft/Anthropic）&gt; 行业分析/博客。</li>
+<li><strong>取证方式</strong>：WebSearch 做发现，<code>curl</code> 实抓 arXiv HTML（<code>arxiv.org/html/&lt;id&gt;</code>）、GitHub raw README、官方文档页正文；所有「原文」为逐字复制。本环境 WebFetch 被域名校验拦截，故一律用 curl；octo 工作流平台（内部工作流服务）本次调研期间<strong>连接被拒（服务不可达）</strong>，故 DAG 注册脚本已就绪待平台恢复后补登（见第十节）。</li>
+<li><strong>覆盖结果</strong>：Harness 实抓 7 个来源（Octo/明略 的「Octo」为人机协作平台非表格 harness，标注为负结果）；Skill 实抓 4 个来源；Evaluation 实抓 5 个来源（DUET、Domain-Spreadsheet 未解析到真实来源，记为负结果）。</li>
+</ul>
+<h2 id="harness">三、Harness 调研（最佳实践）</h2>
+<p><strong>一般流程</strong>：用户 instruction → agent 在多轮循环中「观察表格状态 → 选工具 → 执行动作 → 校验」→ 产出工作簿。各家差异在<strong>动作空间粒度、工具调用协议、沙箱（真 Excel vs LibreOffice vs Python）、以及自校验机制</strong>四处。</p>
+<h3 id="31-spreadsheet-rlrl-harness">3.1 Spreadsheet-RL（最先进，RL 训练 + 专用 harness）</h3>
+<blockquote>
+<p><strong>来源</strong>：Spreadsheet-RL: Advancing LLM Agents on Realistic Spreadsheet Tasks via RL，Chi et al.（UIUC），arXiv:2605.22642v1，2026-05-21
+<strong>链接</strong>：https://arxiv.org/html/2605.22642
+<strong>原文（harness）</strong>："the harness defines a clear role for the agent, routes different spreadsheet operations to specialized tools, and enforces safe tool-calling rules that allow parallel read-only inspection while serializing write operations to avoid conflicting workbook mutations. The harness further guides the agent through an inspect, modify, and verify workflow"
+<strong>原文（工具路由）</strong>："Use find_cells for headers/anchors, inspect_range for relevant ranges, fill_formula for formula-filled targets, clear_range for blank cells, delete_rows/delete_columns for structural deletion, recalculate_and_read after custom formula edits, and code_interpreter for custom logic or fallback."
+<strong>原文（运行时）</strong>："Spreadsheet Gym utilizes Microsoft Excel as its spreadsheet instance... including dynamic array formulas such as FILTER, UNIQUE, SORT, TAKE, and MAP, many of which are lacking in alternative engines such as LibreOffice Calc."</p>
+</blockquote>
+<ul>
+<li><strong>动作空间</strong>：电子表格原生工具（定位/读取/填公式/清空/删行列/重算读回）+ <code>code_interpreter</code> 兜底，把表格语义编进工具而非裸 Python。</li>
+<li><strong>工具协议/并发</strong>：结构化 function-calling；"Concurrent read-only calls are allowed up to 20 per assistant turn. Write-related calls must be issued one at a time"——读可并行、写必串行。</li>
+<li><strong>沙箱/校验</strong>：真实 Microsoft Excel 实例（Spreadsheet Gym），每条 rollout 文件系统隔离以支持并行 RL（VeRL + GRPO 结果奖励）；校验靠 <code>recalculate_and_read</code>「recalculates the workbook in Excel and reads requested ranges... allowing the model to verify custom formula edits under faithful spreadsheet semantics」。</li>
+<li>注：HF 模型卡 <code>Spreadsheet-RL/Spreadsheet-RL-8B</code> curl 无法渲染，仅得 WebSearch 片段，标<strong>原文片段不完整</strong>。</li>
+</ul>
+<h3 id="32-sv-excel-agentmcp">3.2 sv-excel-agent（MCP 协议代表）</h3>
+<blockquote>
+<p><strong>来源</strong>：Open Source Excel AI Agent，SylvianAI（GitHub README）
+<strong>链接</strong>：https://github.com/sylvianai/sv-excel-agent
+<strong>原文</strong>："This repo consists of two main parts: an Excel MCP server (excel_mcp) and an Excel AI Agent Runner (excel_agent)... The Excel MCP server allows all agents to have access to a set of ~30 tools that allow editing of the Excel file directly."</p>
+</blockquote>
+<ul>
+<li><strong>协议</strong>：<strong>MCP over SSE</strong>（<code>mcp.run_sse_async(host="127.0.0.1", port=8765)</code>，agent 连 <code>http://127.0.0.1:8765/sse</code>），工具协议与模型解耦——任何支持 MCP 的 agent 都能接。</li>
+<li><strong>沙箱/校验</strong>：编辑输入文件的副本；在「SpreadsheetBench 的 50 条验证子集」上报 Pass@1；README 未明确自校验机制。</li>
+</ul>
+<h3 id="33-pistamicrosoftofficejs">3.3 PISTA（Microsoft，Office.js + 可审计人机协作）</h3>
+<blockquote>
+<p><strong>来源</strong>：Auditing and Controlling AI Agent Actions in Spreadsheets，Microsoft Research，arXiv:2604.20070
+<strong>链接</strong>：https://arxiv.org/html/2604.20070
+<strong>原文</strong>："Pista is implemented as an extension for Microsoft Excel that works on both the web and desktop versions... Snippets are transmitted to the front-end and executed via the Office.js API, with sheet state cached in the browser at each step to support Branching Exploration. We used Gemini 3.0 Flash for all features requiring code generation"</p>
+</blockquote>
+<ul>
+<li><strong>协议/沙箱</strong>：LLM 生成 <strong>Office.js 代码片段</strong>在 Excel 前端（web+desktop）执行；每步缓存浏览器内表格状态。</li>
+<li><strong>多轮/校验</strong>：<strong>人在环</strong>——「pauses at each step and advances only when the user clicks forward」，支持逐步局部纠错（Localized Editing）与分支探索（Branching Exploration）。校验是混合主动的人工监督，而非自动自检。</li>
+</ul>
+<h3 id="34-sheetmindbnf">3.4 SheetMind（BNF 文法约束动作）</h3>
+<blockquote>
+<p><strong>来源</strong>：SheetMind: An End-to-End LLM-Powered Multi-Agent Framework for Spreadsheet Automation，Cornell/HKUST(GZ)，arXiv:2506.12339v2，2026-07-13
+<strong>链接</strong>：https://arxiv.org/html/2506.12339v2
+<strong>原文</strong>："a hierarchical agentic system consisting of three specialized agents: Manager Agent that decomposes complex user instructions into subtasks; an Action Agent that translates these into structured commands using a Backus–Naur Form (BNF) grammar; and a Reflection Agent that validates alignment between generated actions and the user's original intent... the front-end executes them via Google Apps Script"</p>
+</blockquote>
+<ul>
+<li><strong>动作空间</strong>：Action Agent 输出 <strong>BNF 文法约束的结构化命令</strong>（非自由 Python），作为 Google Workspace 扩展经 Apps Script 执行。</li>
+<li><strong>校验</strong>：Reflection Agent 迭代校验（如复利公式历经 4 轮修正）；SCB-221 上报 100% Exec@1 / 54.8% Pass@1（优于 SheetCopilot 44.3%）。</li>
+</ul>
+<h3 id="35-57">3.5 其余经核验来源（并列第 5–7 来源）</h3>
+<ul>
+<li><strong>SheetCopilot</strong>（arXiv:2305.19308，NeurIPS 2023）：<strong>原文</strong>："we propose to model the functionalities of existing spreadsheet software as a set of virtual APIs called atomic actions. An atomic action is comprised of an API name, a typed argument list, a usage document string, and several usage examples." → 平台无关的「原子动作虚拟 API」+ 状态机 Planning/Revising/Acting，出错回到 Revising 重提示直到输出 "Done!"。</li>
+<li><strong>SheetAgent</strong>（arXiv:2403.03636v2）：<strong>原文</strong>："It can invoke Python tool to interact with a Python sandbox for solution evaluation... utilizing libraries like openpyxl and pandas." → Planner/Informer/Retriever，Python sandbox（openpyxl/pandas）ReAct；自承不支持透视表/宏。</li>
+<li><strong>Eino ADK Excel Agent</strong>（ByteDance/CloudWeGo）：<strong>链接</strong> https://www.cloudwego.io/docs/eino/overview/eino_adk_excel_agent/ <strong>原文</strong>："Planner... Executor... CodeAgent: Receives instructions from the Executor, calls various tools (such as reading/writing files, running Python code, etc.)..." → 分层多 agent + plan-execute-reflect 闭环 + Ark Agentkit Sandbox。</li>
+<li><strong>Claude for Excel（demo）</strong>：anthropics/claude-agent-sdk-demos，<strong>原文</strong>："A demonstration desktop application powered by Claude and the Claude Agent SDK... LibreOffice (optional, for formula recalculation)" → Agent SDK 驱动 Python(openpyxl)，LibreOffice 做公式重算。生产版（Office.js 侧栏 + Opus 4.6）页面为营销内容，标<strong>原文片段不完整</strong>。</li>
+</ul>
+<p><strong>负结果</strong>：MiningLamp/明略「Octo」GitHub 组织是人机协作工作台（octo-server/cli/matter），<strong>非表格 harness</strong>；Google Workspace 的「Octo – AI Data Analyst for Google Sheets」marketplace 页 curl 无法渲染，标<strong>原文片段不完整</strong>。</p>
+<h2 id="skill">四、Skill 调研（最佳实践）</h2>
+<p><strong>一般流程/IO</strong>：skill = 一个文件夹，内含 <code>SKILL.md</code>（YAML frontmatter 的 <code>name</code>/<code>description</code> 供模型判断<strong>何时触发</strong>，Markdown 正文是指令逻辑），可选 <code>scripts/references/assets</code>。模型按 <code>description</code> 动态加载。输入输出要么是文件（<code>.xlsx/.csv</code>，产出型），要么是对活动工作簿的操作（应用内型）。</p>
+<h3 id="41-anthropic-xlsx-skill">4.1 Anthropic <code>xlsx</code> skill（格式定义者 + 产出型）</h3>
+<blockquote>
+<p><strong>来源</strong>：<code>skills/xlsx/SKILL.md</code> + repo README，Anthropic（anthropics/skills）
+<strong>链接</strong>：https://github.com/anthropics/skills/blob/main/skills/xlsx/SKILL.md
+<strong>原文（frontmatter）</strong>："description: \"Use this skill any time a spreadsheet file is the primary input or output. This means any task where the user wants to: open, read, edit, or fix an existing .xlsx, .xlsm, .xltx, .csv, or .tsv file ... Do NOT trigger when the primary deliverable is a Word document, HTML report, standalone Python script...\""
+<strong>原文（README）</strong>："Skills are folders of instructions, scripts, and resources that Claude loads dynamically... Each skill is self-contained in its own folder with a <code>SKILL.md</code> file containing the instructions and metadata that Claude uses."</p>
+</blockquote>
+<ul>
+<li><strong>作用域/触发</strong>：模型按 description 触发，含<strong>显式反向触发</strong>（Word/HTML/Google Sheets 不触发），精确边界避免误召。</li>
+<li><strong>IO/schema</strong>：消费/产出 <code>.xlsx/.xlsm/.xltx/.csv/.tsv</code>；无 JSON 输出 schema，但有硬性产出<strong>契约</strong>："<strong>Use formulas, never hardcoded results.</strong>" 与 "<strong>Zero formula errors.</strong> Never ship while <code>recalc.py</code> reports <code>errors_found</code>." —— <code>recalc.py</code> 返回 JSON 状态包（<code>status</code>∈<code>success</code>/<code>errors_found</code>、<code>total_formulas</code>、<code>total_errors</code>）。<strong>这是全场唯一的机器可读输出 schema</strong>，对自动化评估极有价值。</li>
+</ul>
+<h3 id="42-pi-for-excelagentskillsio">4.2 pi-for-excel（agentskills.io 标准 + 作用域语义最清晰）</h3>
+<blockquote>
+<p><strong>来源</strong>：README + <code>docs/agent-skills-interop.md</code>，tmustier（开源多模型 Excel 插件）
+<strong>链接</strong>：https://github.com/tmustier/pi-for-excel/blob/main/docs/agent-skills-interop.md
+<strong>原文</strong>："## 1) Agent Skills (standard) — Standard: https://agentskills.io/specification — Format: <code>SKILL.md</code> + frontmatter — Portable across providers/harnesses ... Use the term <strong>skill</strong> only for standards-based <code>SKILL.md</code> artifacts."</p>
+</blockquote>
+<ul>
+<li><strong>作用域/调用</strong>：运行时暴露 <code>skills</code> 工具（<code>list</code>/<code>read</code>/<code>install</code>），系统提示注入 <code>&lt;available_skills&gt;</code> 让模型按需加载；读结果<strong>按 session 缓存</strong>，session 身份变化即失效。<em>integration</em> 另带 <code>scope (session/workbook)</code>。</li>
+<li><strong>复用/组合优先级</strong>："1. bundled 2. managed external (<code>skills/external/...</code>) 3. workspace auto-discovered"；并警示 "workspace-provided skills are untrusted input and may contain risky instructions/scripts"——<strong>供应链/注入风险</strong>提示。</li>
+<li><strong>IO</strong>：16 个内置工具操作活动工作簿（如 <code>write_cells</code>「with overwrite protection and auto-verification」）；skill 本身「mostly instruction logic」无正式输出 schema。</li>
+</ul>
+<h3 id="43-microsoft-copilot-in-excel-skills">4.3 Microsoft Copilot in Excel — Skills（标准被官方采纳）</h3>
+<blockquote>
+<p><strong>来源</strong>：Use skills with Copilot in Excel / Custom skills format requirements，Microsoft Support
+<strong>链接</strong>：https://support.microsoft.com/en-us/excel/copilot/copilot-in-excel-skills
+<strong>原文</strong>："Custom skills must follow the industry standard format to be recognized by Copilot in Excel. Each skill needs an individual folder, and that folder must have a SKILL.md file... The metadata section... is called the frontmatter. It holds the name and a description that tells Copilot when to use the skill."</p>
+</blockquote>
+<ul>
+<li><strong>作用域/调用</strong>：<code>@mention</code>（如 <code>@clean-data</code>、<code>@chart-design</code>、<code>@skill-builder</code>）；自定义 skill 存 OneDrive，<strong>文件夹名必须等于 SKILL.md 的 <code>name</code></strong> 才被识别（改名即「卸载」）。</li>
+<li><strong>意义</strong>：微软在生产级产品里<strong>逐字采用 Anthropic 的 SKILL.md 约定</strong>，坐实该格式为事实标准。</li>
+</ul>
+<h3 id="44-octospec-workflow-octo-specskillmd">4.4 octospec-workflow（明略 octo-spec，SKILL.md 封装范例，非表格）</h3>
+<blockquote>
+<p><strong>来源</strong>：<code>.claude/skills/octospec-workflow/SKILL.md</code>，Mininglamp-OSS/octo-spec
+<strong>链接</strong>：https://github.com/Mininglamp-OSS/octo-spec/blob/main/templates/octospec-init/.claude/skills/octospec-workflow/SKILL.md
+<strong>原文</strong>："description: Use when implementing a feature, fixing a bug... Drives the octospec 4-phase engineering flow (Plan, Implement, Verify, Finish)... Triggers on requests like \"add ...\", ... 写功能, 修 bug..."
+- 标准 SKILL.md + 双语触发词，repo 作用域 + 斜杠命令（<code>/octospec-plan</code> 等）。<strong>但处理的是代码工程产物（brief.md/context.yaml），与 Excel 无关</strong>——仅作「octo 系 skill 封装」的可核验范例收录，不是表格 skill。</p>
+</blockquote>
+<h2 id="_3">五、评估方法调研（最佳实践）</h2>
+<p><strong>一般流程/IO</strong>：输入 =（instruction + 输入工作簿 + 可能的多测试用例）；输出 = agent 产出工作簿；grader 比对产出 vs golden 给单题分 → 聚合类别分/总分。关键细节在 <strong>grader 设计（精确比对 vs 容差 vs judge）</strong> 与 <strong>可复现性（是否依赖真 Excel/COM/API key）</strong>。</p>
+<h3 id="51-spreadsheetbench-v1online-judge">5.1 SpreadsheetBench v1（online-judge 多测试用例）</h3>
+<blockquote>
+<p><strong>来源</strong>：SpreadsheetBench: Towards Challenging Real World Spreadsheet Manipulation，Zeyao Ma et al.（人大/清华），NeurIPS 2024 Spotlight，arXiv:2406.14991
+<strong>链接</strong>：https://arxiv.org/abs/2406.14991 · https://github.com/RUCKBReasoning/SpreadsheetBench
+<strong>原文</strong>："SpreadsheetBench is built from 912 real questions gathered from online Excel forums... we propose a more reliable evaluation metric akin to online judge platforms, where multiple spreadsheet files are created as test cases for each instruction"</p>
+</blockquote>
+<ul>
+<li><strong>设计</strong>：912 指令 / ~2729 测试用例（每指令 3 个）；单步操作；10 大类；分 cell-level（指定精确单元格）与 sheet-level。</li>
+<li><strong>grader</strong>：online-judge 式单元格比对，<strong>无 LLM judge</strong>；软限制（IOI 式部分分）/ 硬限制（ICPC 式全或无）。</li>
+<li><strong>可复现性</strong>：全公开数据+代码；刻意「Software-independent Inference」不依赖 Excel API，可在 Excel/LibreOffice/WPS 跑。多模态不特殊处理。</li>
+</ul>
+<h3 id="52-spreadsheetbench-2-grader-vlm">5.2 SpreadsheetBench 2（工作流级 + 双 grader，含 VLM）</h3>
+<blockquote>
+<p><strong>来源</strong>：SpreadsheetBench 2: Evaluating Agents on End-to-End Business Spreadsheet Workflows，Jian Zhu et al.（人大/Aptura/Shortcut/AfterQuery），arXiv:2606.29955，2026-06-29
+<strong>链接</strong>：https://arxiv.org/abs/2606.29955 · https://github.com/RUCKBReasoning/SpreadsheetBench-2
+<strong>原文（规模）</strong>："The benchmark contains 321 tasks; each instance averages 11.8 worksheets and requires 593.5 cell modifications... the best model achieves 34.89% overall task accuracy, and debugging accuracy is as low as 12.00%."
+<strong>原文（grader）</strong>："Modification is a cell-level metric: for each task, we compute the fraction of target cells whose computed values match the golden file"；"Accuracy is a task-level metric: a task is scored 1 if every cell in the output spreadsheet matches the golden file (covering both target and non-target cells), and 0 otherwise."
+<strong>原文（可视化）</strong>："GLM-4.6V ... as the judge to produce a binary pass / fail signal per criterion"，两维 "Data Correctness ... and Format Compliance (e.g., chart type, axis labels, color schemes)"。</p>
+</blockquote>
+<ul>
+<li><strong>设计</strong>：321 工作流任务，真实商业数据（财报/filings），多表（均 11.8 sheet / 593.5 改动）。三大类 generation（financial modeling + template）/ debugging / visualization。</li>
+<li><strong>grader</strong>：非可视化 = 单元格比对（Modification 连续 + Accuracy 任务级全或无）；可视化 = VLM-as-judge（GLM-4.6V）逐条二值。</li>
+<li><strong>可复现性</strong>：公开；沙箱「pre-installed with ... NumPy, Pandas, Matplotlib, openpyxl) and LibreOffice with its Python UNO bridge... No network access」。Claude Opus 4.6 34.89% / GPT-5.2 26.79 / Gemini 3.1 Pro 23.68。</li>
+<li><strong>（已另有专项报告）</strong> 本小节结论与此前《SpreadsheetBench v2 评估方法调研》一致：论文「every cell match」在代码里实为 1% 容差 + 99.8% regression 阈值 + 等价类。</li>
+</ul>
+<h3 id="53-wtm-benchmicrosoft-vlm">5.3 WTM-BENCH（Microsoft，公式等价 + 结构匹配，刻意不用 VLM）</h3>
+<blockquote>
+<p><strong>来源</strong>：Back to the Future: A workbook time machine for spreadsheet creation benchmarks，Mansi Uniyal et al.（Microsoft），COLM 2026，arXiv:2608.07873
+<strong>链接</strong>：https://arxiv.org/abs/2608.07873 · https://github.com/microsoft/WTM-Bench
+<strong>原文</strong>："From this corpus we curate WTM-Bench, a 150-task evaluation benchmark with queries at three levels of specificity... query specificity, agent orchestration, and interface API used to control spreadsheets play a big role in LLM performance"</p>
+</blockquote>
+<ul>
+<li><strong>设计</strong>：150 任务，通过「逆向还原」成品工作簿为 (input, output, query) 三元组；三档 query 具体度。</li>
+<li><strong>grader</strong>：代码执行 + 加权结构匹配。公式——"Cell values are evaluated by computing formula results (via the Formulas library), so equivalent expressions that produce the same output receive full credit"（<strong>公式等价即容差</strong>）。图表——"chart type (40%...), series count (20%...), and series data references (40%: Jaccard overlap...). Axis labels, legend styling, and color choices are not evaluated"。透视表/条件格式各有子项评分。</li>
+<li><strong>可复现性</strong>：公开（GitHub+HF）；后端含 "Python VBA OfficeJS"，部分配置需真 Excel。</li>
+<li><strong>多模态</strong>：图表走<strong>结构匹配而非 VLM</strong>，且显式不评视觉样式——与 SB2 相反的设计选择。</li>
+</ul>
+<h3 id="54-workstreambenchcolumbia-llm-judge-rubric">5.4 WorkstreamBench（Columbia，整簿 LLM-judge rubric）</h3>
+<blockquote>
+<p><strong>来源</strong>：WorkstreamBench: Evaluating LLM Agents on End-to-End Spreadsheet Tasks in Finance，Thomson Yen et al.（Columbia Business School），arXiv:2605.22664（后续版本更名 MBABench）
+<strong>链接</strong>：https://arxiv.org/abs/2605.22664
+<strong>原文</strong>："WorkstreamBench expects a complete multi-sheet workbook, and consequently employs a holistic evaluation centered on high-level quality... a taxonomy organized around three core dimensions: Accuracy, Format, and Formula."</p>
+</blockquote>
+<ul>
+<li><strong>设计</strong>：228 金融任务，难度 1–5（WSP/FMWC/ModelOff 来源），从高层指令产出完整多表工作簿。</li>
+<li><strong>grader</strong>：<strong>经校验的 agentic LLM-judge</strong> 按 Accuracy/Formula/Format 三维 rubric 评分，可按维度选择性检查 sheet/range/公式/格式；校验结果 "the agentic judge attains 0.90 accuracy, 0.89 balanced accuracy, and 0.87 F1 score on 221 expert annotations"——<strong>judge 可靠性被量化</strong>，这是开放档评估的关键背书。</li>
+<li><strong>可复现性</strong>：有 codebase；但 GUI arm（ChatGPT/Claude 产品）用 Playwright 驱动，需专有产品访问。</li>
+</ul>
+<h3 id="55-sheetbrain-sheetbench">5.5 SheetBrain / SheetBench（结构复杂大表推理）</h3>
+<blockquote>
+<p><strong>来源</strong>：SheetBrain: A Neuro-Symbolic Agent for Accurate Reasoning over Complex and Large Spreadsheets（CMU/浙大/Brown/Cambridge/MSR），arXiv:2510.19247
+<strong>链接</strong>：https://arxiv.org/abs/2510.19247 · https://github.com/microsoft/SheetBrain
+<strong>原文</strong>："we introduce SheetBench, a new benchmark targeting large, multi-table, and structurally complex spreadsheets... compiled from 69 case data selected from 11 public datasets, including HiTab, MiMoTable, ... SpreadsheetBench, SheetAgent..."
+- <strong>设计</strong>：69 案例，取自 11 个公开数据集重标；分 Complex Tables / Multi-table Layouts / Large Sheets / Editing Operations。grader 用源数据集标签；执行走「Python sandbox + Excel helper toolkit」。多模态非重点。</p>
+</blockquote>
+<p><strong>负结果</strong>：<strong>DUET</strong> 多次检索未出现任何电子表格 benchmark，无可引链接，标<strong>原文片段不完整</strong>；<strong>"Domain-Spreadsheet"</strong> 非具名 benchmark，领域专项线索实为 Spreadsheet-RL（arXiv:2605.22642）、BlueFin（arXiv:2605.30907）、SpreadsheetArena（arXiv:2603.10002），可核验但本次未深抓引文。</p>
+<h2 id="_4">六、综合排序（可复现性 / 价值 / 成熟度）</h2>
+<p>评分 H=高 / M=中 / L=低。可复现性看「公开代码数据 + 是否需专有工具」；价值看「性能/创新/指导意义」；成熟度看「同行评审 + 采用度」。</p>
+<h3 id="harness_1">Harness 排序</h3>
+<table>
+<thead>
+<tr>
+<th>排名</th>
+<th>对象</th>
+<th>可复现性</th>
+<th>价值</th>
+<th>成熟度</th>
+<th>理由（基于可核验标准）</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td>SheetCopilot</td>
+<td>H</td>
+<td>H</td>
+<td>H</td>
+<td>NeurIPS'23，代码+221 基准公开，atomic-action 抽象被后续广泛引用</td>
+</tr>
+<tr>
+<td>2</td>
+<td>SheetAgent</td>
+<td>H</td>
+<td>M</td>
+<td>H</td>
+<td>代码公开、Python sandbox 范式清晰；能力有上限（无透视表/宏）</td>
+</tr>
+<tr>
+<td>3</td>
+<td>Spreadsheet-RL</td>
+<td>M</td>
+<td>H</td>
+<td>M</td>
+<td>架构最先进（专用工具+RL+真 Excel Gym）；但依赖真 Excel，8B 模型卡未完整可抓</td>
+</tr>
+<tr>
+<td>4</td>
+<td>sv-excel-agent</td>
+<td>H</td>
+<td>M</td>
+<td>L</td>
+<td>MCP 协议解耦、工程可复用；非学术、无同行评审</td>
+</tr>
+<tr>
+<td>5</td>
+<td>SheetMind</td>
+<td>M</td>
+<td>M</td>
+<td>M</td>
+<td>BNF 约束动作有创新；绑定 Google Apps Script 环境</td>
+</tr>
+<tr>
+<td>6</td>
+<td>PISTA</td>
+<td>L</td>
+<td>H</td>
+<td>M</td>
+<td>可审计人机协作价值高；闭源 Excel 扩展，Office.js+Gemini 难自建复现</td>
+</tr>
+<tr>
+<td>7</td>
+<td>Eino ADK Excel Agent</td>
+<td>H</td>
+<td>M</td>
+<td>M</td>
+<td>文档+代码可循（Go/CloudWeGo）；偏工程 demo</td>
+</tr>
+</tbody>
+</table>
+<h3 id="skill_1">Skill 排序</h3>
+<table>
+<thead>
+<tr>
+<th>排名</th>
+<th>对象</th>
+<th>可复现性</th>
+<th>价值</th>
+<th>成熟度</th>
+<th>理由</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td>Anthropic <code>xlsx</code> skill</td>
+<td>H</td>
+<td>H</td>
+<td>H</td>
+<td>源可得、是格式定义者；唯一带机器可读产出契约（recalc.py JSON + 公式零错误）</td>
+</tr>
+<tr>
+<td>2</td>
+<td>Microsoft Copilot Skills</td>
+<td>M</td>
+<td>H</td>
+<td>H</td>
+<td>官方生产级采纳 SKILL.md，模板齐全；自定义 skill 执行需 Copilot 环境</td>
+</tr>
+<tr>
+<td>3</td>
+<td>pi-for-excel</td>
+<td>H</td>
+<td>M</td>
+<td>L</td>
+<td>开源、作用域/优先级/注入风险语义最完整；社区较小</td>
+</tr>
+<tr>
+<td>4</td>
+<td>octospec-workflow</td>
+<td>H</td>
+<td>L</td>
+<td>M</td>
+<td>标准 SKILL.md 范例；非表格领域，仅封装参考</td>
+</tr>
+</tbody>
+</table>
+<h3 id="_5">评估方法排序</h3>
+<table>
+<thead>
+<tr>
+<th>排名</th>
+<th>对象</th>
+<th>可复现性</th>
+<th>价值</th>
+<th>成熟度</th>
+<th>理由</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td>SpreadsheetBench v1</td>
+<td>H</td>
+<td>H</td>
+<td>H</td>
+<td>NeurIPS'24，软件无关、全公开、online-judge 多用例，最易复现</td>
+</tr>
+<tr>
+<td>2</td>
+<td>SpreadsheetBench 2</td>
+<td>H</td>
+<td>H</td>
+<td>M</td>
+<td>工作流级+双 grader 覆盖面最全；可视化半需 Windows COM + VLM key</td>
+</tr>
+<tr>
+<td>3</td>
+<td>WTM-BENCH</td>
+<td>M</td>
+<td>H</td>
+<td>M</td>
+<td>MSR/COLM'26，公式等价容差+结构化图表评分优雅；部分配置需真 Excel</td>
+</tr>
+<tr>
+<td>4</td>
+<td>WorkstreamBench</td>
+<td>M</td>
+<td>H</td>
+<td>M</td>
+<td>judge 可靠性被量化（0.90）；GUI arm 需专有产品</td>
+</tr>
+<tr>
+<td>5</td>
+<td>SheetBrain/SheetBench</td>
+<td>M</td>
+<td>M</td>
+<td>M</td>
+<td>大表结构复杂度评测补位；样本量小（69）</td>
+</tr>
+</tbody>
+</table>
+<h2 id="_6">七、特殊情况（多模态是否被特殊处理，及其他）</h2>
+<p><strong>多模态（图表/可视化）确实被当作特殊情况，且出现两条对立路线：</strong></p>
+<ul>
+<li><strong>路线 A：导图 + VLM-as-judge（SpreadsheetBench 2）。</strong> 图表无法用单元格比对，故 SB2 把图导出后交 VLM 按 rubric 逐条判。<strong>原文</strong>："GLM-4.6V ... as the judge to produce a binary pass / fail signal per criterion"，两维 Data Correctness / Format Compliance。代价：<strong>依赖 Windows 的 Excel/WPS COM 导图 + VLM API key</strong>，可复现性下降。</li>
+<li><strong>路线 B：结构化匹配，刻意不用 VLM（WTM-BENCH）。</strong> <strong>原文</strong>："chart type (40%...), series count (20%...), and series data references (40%: Jaccard overlap of reference strings). Axis labels, legend styling, and color choices are not evaluated." 用图表对象的结构属性做加权部分分，牺牲视觉保真换<strong>确定性与可复现</strong>。</li>
+</ul>
+<blockquote>
+<p><strong>启示</strong>：是否上 VLM 取决于「视觉保真」是否进评分目标。要稳定可复现→走结构匹配；要评到配色/样式→必须 VLM-judge。</p>
+</blockquote>
+<p><strong>其他特殊情况（均有原始来源）：</strong></p>
+<ol>
+<li><strong>公式缓存 vs 公式字符串</strong>：openpyxl 以 <code>data_only</code> 读的是<strong>缓存值</strong>，未重算则为 None。Spreadsheet-RL 用 <code>recalculate_and_read</code>、Anthropic skill 用 <code>recalc.py</code>、SB2 用 LibreOffice UNO、WTM-BENCH 用 Formulas 库算公式结果——<strong>「先重算再判分」是全领域共识的前置步骤</strong>。</li>
+<li><strong>公式等价容差</strong>：WTM-BENCH <strong>原文</strong>「equivalent expressions that produce the same output receive full credit」——评值不评串，避免把 <code>=A1+A2</code> 判负于 <code>=SUM(A1:A2)</code>。</li>
+<li><strong>保护未修改区域（回归）</strong>：SB2 的 Accuracy「covering both target and non-target cells」——不仅要改对该改的，还要求<strong>没碰坏不该动的</strong>。</li>
+<li><strong>专有工具依赖</strong>：真 Excel/COM（Spreadsheet-RL、PISTA、WTM 部分配置）、GUI 产品（WorkstreamBench 的 Playwright arm）会显著拉低可复现性。</li>
+<li><strong>大数据量/长链路</strong>：SB2 均 11.8 表 / 593.5 改动、SheetBench 专攻 Large Sheets——大工作簿下<strong>读表上下文裁剪</strong>（SheetAgent 给 Informer「3 example rows」+ schema）成为必需。</li>
+</ol>
+<h2 id="某表格 Agent 产品-query">八、对 某表格 Agent 产品 的启示（线上 query 自动化评估 + 服务表格大数据处理）</h2>
+<h3 id="81-judge">8.1 评估方案：双档拆分 + judge 校准</h3>
+<p>线上 user query 多为开放答案、无单一 golden，直接套 SB2 的「任务级全或无」太严。建议：</p>
+<ul>
+<li><strong>可判定档</strong>（有唯一正确锚点的 query）：复用 SB2/WTM 的「<strong>锚点单元格 + 公式等价容差 + 回归保护</strong>」自动判分。像 SB2 的 <code>answer_position</code> 一样，只圈定「必须正确的单元格/字段」，用 WTM 的「值等价即满分」做容差。<strong>连续分</strong>（命中率）优先于全或无。</li>
+<li><strong>开放档</strong>（图表/排版/分析结论）：复用 <strong>WorkstreamBench 式 rubric + LLM/VLM-judge</strong>，且必须像它一样<strong>先用专家标注量化 judge 可靠性</strong>（它报到 0.90 acc 才敢用）。图表走 SB2 的 VLM-judge（若需视觉保真）或 WTM 的结构匹配（若只需确定性）。</li>
+</ul>
+<h3 id="82">8.2 一个改造样例</h3>
+<p>线上 query：<strong>「把这张销售表按区域汇总，算出各区域同比，并画一张柱状图」</strong> →
+- <strong>可判定档</strong>：<code>各区域同比</code> 写入指定单元格 → 用「锚点单元格 + 1% 值容差（公式等价）」自动判对错；并校验原始明细区（回归位）未被改坏。
+- <strong>开放档（图表）</strong>：rubric = {图表类型=柱状、X 轴=区域且齐全、数值绑定正确、标题含「同比」} → 若只需确定性走 WTM 结构匹配（type/series/data-ref Jaccard）；若要评配色/样式走 VLM-judge 二值。
+- <strong>聚合</strong>：可判定档出「精确率（连续）」，开放档出「rubric 通过率（连续）+ 校准后的二值达标」。</p>
+<h3 id="83-vs">8.3 可直接迁移 vs 需改造</h3>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>可直接迁移</th>
+<th>需改造 / 不适用</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>评估</td>
+<td>锚点式 golden、公式等价容差、回归保护、rubric+judge、judge 可靠性量化</td>
+<td>任务级「全或无」过严→改连续分；SB2 唯一 golden→线上多解需先分档</td>
+</tr>
+<tr>
+<td>Harness</td>
+<td>inspect→modify→verify 闭环、读并行/写串行、专用工具优于裸 Python、先重算后判</td>
+<td>真 Excel/COM 依赖→大数据量线上服务宜用 LibreOffice UNO/Formulas 库无头重算</td>
+</tr>
+<tr>
+<td>Skill</td>
+<td>SKILL.md 封装把「表格大数据处理」常见套路（透视/清洗/同比/建模）沉淀为可复用 skill；recalc.py 式 JSON 产出契约可直接接自动判分</td>
+<td><code>&gt;0.7</code> 等人为阈值须用标注集重新校准；workspace skill 为不可信输入须做注入防护</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p><strong>服务「表格大数据处理」用户的落点</strong>：把高频 query 模式固化成 <code>SKILL.md</code>（如「同比/环比」「数据清洗」「透视汇总」「财务建模模板」），用「专用工具 + 先重算后校验」保证正确性，用「公式而非硬编码值」保证可维护——这正是 Anthropic xlsx skill 的硬性契约。</p>
+</blockquote>
+<h2 id="_7">九、参考文献与链接汇总</h2>
+<table>
+<thead>
+<tr>
+<th>类型</th>
+<th>标题</th>
+<th>机构/作者</th>
+<th>链接</th>
+<th>相关性</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>论文</td>
+<td>Spreadsheet-RL (arXiv:2605.22642)</td>
+<td>UIUC / Chi et al.</td>
+<td>https://arxiv.org/html/2605.22642</td>
+<td>最先进专用 harness + RL + 真 Excel Gym</td>
+</tr>
+<tr>
+<td>论文</td>
+<td>SheetCopilot (arXiv:2305.19308)</td>
+<td>NeurIPS'23 / Li et al.</td>
+<td>https://arxiv.org/html/2305.19308</td>
+<td>atomic-action 虚拟 API + 状态机规划</td>
+</tr>
+<tr>
+<td>论文</td>
+<td>SheetAgent (arXiv:2403.03636)</td>
+<td>Chen et al.</td>
+<td>https://arxiv.org/html/2403.03636v2</td>
+<td>Planner/Informer/Retriever + Python sandbox</td>
+</tr>
+<tr>
+<td>论文</td>
+<td>SheetMind (arXiv:2506.12339)</td>
+<td>Cornell/HKUST(GZ)</td>
+<td>https://arxiv.org/html/2506.12339v2</td>
+<td>BNF 文法约束动作 + 反思校验</td>
+</tr>
+<tr>
+<td>论文</td>
+<td>PISTA (arXiv:2604.20070)</td>
+<td>Microsoft Research</td>
+<td>https://arxiv.org/html/2604.20070</td>
+<td>Office.js + 可审计人机协作 harness</td>
+</tr>
+<tr>
+<td>代码</td>
+<td>sv-excel-agent</td>
+<td>SylvianAI</td>
+<td>https://github.com/sylvianai/sv-excel-agent</td>
+<td>MCP server(~30 tools)+runner</td>
+</tr>
+<tr>
+<td>文档</td>
+<td>Eino ADK Excel Agent</td>
+<td>ByteDance/CloudWeGo</td>
+<td>https://www.cloudwego.io/docs/eino/overview/eino_adk_excel_agent/</td>
+<td>分层多 agent + plan-execute-reflect</td>
+</tr>
+<tr>
+<td>代码</td>
+<td>Claude for Excel demo</td>
+<td>Anthropic</td>
+<td>https://github.com/anthropics/claude-agent-sdk-demos</td>
+<td>Agent SDK + openpyxl + LibreOffice 重算</td>
+</tr>
+<tr>
+<td>代码</td>
+<td>Anthropic skills (xlsx)</td>
+<td>Anthropic</td>
+<td>https://github.com/anthropics/skills</td>
+<td>SKILL.md 格式定义 + recalc.py 产出契约</td>
+</tr>
+<tr>
+<td>代码</td>
+<td>pi-for-excel</td>
+<td>tmustier</td>
+<td>https://github.com/tmustier/pi-for-excel</td>
+<td>agentskills.io 标准 + 作用域/优先级语义</td>
+</tr>
+<tr>
+<td>文档</td>
+<td>Copilot in Excel Skills</td>
+<td>Microsoft</td>
+<td>https://support.microsoft.com/en-us/excel/copilot/copilot-in-excel-skills</td>
+<td>官方生产级采纳 SKILL.md</td>
+</tr>
+<tr>
+<td>代码</td>
+<td>octo-spec octospec-workflow</td>
+<td>MiningLamp/明略</td>
+<td>https://github.com/Mininglamp-OSS/octo-spec</td>
+<td>SKILL.md 封装范例（非表格）</td>
+</tr>
+<tr>
+<td>论文</td>
+<td>SpreadsheetBench v1 (arXiv:2406.14991)</td>
+<td>人大/清华，NeurIPS'24</td>
+<td>https://arxiv.org/abs/2406.14991</td>
+<td>912 题 online-judge 多测试用例</td>
+</tr>
+<tr>
+<td>论文</td>
+<td>SpreadsheetBench 2 (arXiv:2606.29955)</td>
+<td>人大/Aptura/Shortcut</td>
+<td>https://arxiv.org/abs/2606.29955</td>
+<td>工作流级 + 单元格比对 + VLM-judge</td>
+</tr>
+<tr>
+<td>论文</td>
+<td>WTM-BENCH (arXiv:2608.07873)</td>
+<td>Microsoft，COLM'26</td>
+<td>https://arxiv.org/abs/2608.07873</td>
+<td>公式等价容差 + 结构化图表评分</td>
+</tr>
+<tr>
+<td>论文</td>
+<td>WorkstreamBench (arXiv:2605.22664)</td>
+<td>Columbia Business School</td>
+<td>https://arxiv.org/abs/2605.22664</td>
+<td>整簿 agentic LLM-judge（0.90 acc）</td>
+</tr>
+<tr>
+<td>论文</td>
+<td>SheetBrain/SheetBench (arXiv:2510.19247)</td>
+<td>CMU/MSR 等</td>
+<td>https://arxiv.org/abs/2510.19247</td>
+<td>大表结构复杂度推理评测</td>
+</tr>
+</tbody>
+</table>
+<p><strong>负结果/待确认</strong>：<code>DUET</code>（无电子表格 benchmark 命中，原文片段不完整）；<code>Domain-Spreadsheet</code>（非具名 benchmark，线索实为 Spreadsheet-RL/BlueFin arXiv:2605.30907/SpreadsheetArena arXiv:2603.10002）；Spreadsheet-RL-8B HF 模型卡、PISTA/Octo marketplace 页 curl 无法渲染，均标原文片段不完整。</p>
+<h2 id="_8">十、工作流复现指南</h2>
+<h3 id="101-octo-workflowss-eval-research">10.1 octo-workflow（<code>ss-eval-research</code>）</h3>
+<p>本调研按 octo-workflow DAG 组织，11 节点：<code>scope → {harness, skill, evaluation} → {special-cases, ranking} → 某表格 Agent 产品-implications → report → render-html → publish → update-catalog</code>。构建脚本 <code>[本地脚本路径]</code>（节点/边/meta 均已写好）。</p>
+<blockquote>
+<p><strong>注意</strong>：本次执行期间 octo 平台 <code>内部工作流服务</code> <strong>连接被拒（curl exit 7，服务不可达）</strong>，而外网（arxiv/github）curl 正常——即内网 octo 服务当前宕机，非网络策略问题。工作流 DAG 注册与节点推进<strong>待平台恢复后</strong>运行 <code>python3 [本地脚本路径]</code> 再用 <code>[本地脚本路径]</code> 的 <code>run_node</code> 逐节点推进即可；研究与报告产出不受影响，已独立完成。</p>
+</blockquote>
+<h3 id="102">10.2 调研复现步骤</h3>
+<ol>
+<li><strong>发现</strong>：<code>WebSearch</code> 跑关键词（spreadsheet agent / harness / benchmark / SKILL.md 等）。</li>
+<li><strong>取证</strong>：<code>curl -sSL https://arxiv.org/html/&lt;id&gt;</code> 抓论文全文、<code>curl -sSL https://raw.githubusercontent.com/&lt;org&gt;/&lt;repo&gt;/main/README.md</code> 抓代码库说明、<code>curl -sSL &lt;docs-url&gt;</code> 抓官方文档；HTML 用 <code>python3</code>/<code>sed</code> 抽正文。<strong>本环境 WebFetch 被域名校验拦截，必须用 curl。</strong></li>
+<li><strong>记录</strong>：每来源记【标题/机构/日期 + 链接 + 逐字原文】，不可核验标「原文片段不完整」。</li>
+<li><strong>三类并行</strong>：Harness / Skill / Evaluation 可用三个子 agent 并行调研（本次即如此），各自回传结构化 dossier。</li>
+<li><strong>合成</strong>：按本报告章节组装，核验每条结论都带原文+链接。</li>
+</ol>
+<h3 id="103">10.3 发布</h3>
+<p>HTML 版经 <code>deploy-static-page</code> skill 发布，并登记进 <code>zxy-reports</code> 目录（见文末 URL）。</p>
+<hr />
+<blockquote>
+<p><strong>三句话收尾（若要评测 某表格 Agent 产品 自己的 agent，下一步做什么）</strong>：
+1. 先把线上 query 按「有无唯一正确锚点」分成<strong>可判定档</strong>与<strong>开放档</strong>——可判定档标注锚点单元格+回归区，直接复用 SB2/WTM 的单元格比对内核做自动判分。
+2. 开放档写两维 rubric（正确性/格式），用 LLM/VLM-judge，并<strong>先用一小批专家标注把 judge 可靠性量化到可接受水平</strong>（参照 WorkstreamBench 的 0.90）再放量，图表按是否需视觉保真选 VLM-judge 或结构匹配。
+3. 报告坚持<strong>连续分为主、二值达标为辅</strong>的双口径，并把高频 query 模式沉淀成 <code>SKILL.md</code>（含「先重算后校验、用公式不用硬编码值」契约），既服务评估也直接提升「表格大数据处理」线上能力。</p>
+</blockquote>
+</div><a class="report-home" href="../" aria-label="返回论文目录">← 返回论文目录</a></body></html>

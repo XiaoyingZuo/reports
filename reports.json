@@ -1,0 +1,162 @@
+[
+  {
+    "slug": "zxy-litvista",
+    "title": "LitVISTA：文学叙事结构基准精读",
+    "subtitle": "VISTA Space · 27组主结果 · 5张论文原图 · 复现与实践价值",
+    "date": "2026-10-27",
+    "tags": [
+      "水分 4/10",
+      "价值 7/10",
+      "复现便利 5/10"
+    ],
+    "source": "arXiv:2601.06445v2",
+    "topic": "叙事理解",
+    "cover": "assets/covers/zxy-litvista.png",
+    "path": "zxy-litvista/"
+  },
+  {
+    "slug": "zxy-webcoder",
+    "title": "WebCoder 精读与复现评估",
+    "subtitle": "产物驱动前端 Agent RL：机制、原图、消融、复现缺口与实践价值",
+    "date": "2026-10-21",
+    "tags": [
+      "水分 4/10",
+      "价值 8/10",
+      "可复现 低"
+    ],
+    "source": "arXiv:2610.23104v1",
+    "topic": "智能体与代码",
+    "cover": "assets/covers/zxy-webcoder.png",
+    "path": "zxy-webcoder/"
+  },
+  {
+    "slug": "zxy-ss-eval",
+    "title": "表格 AI Agent 的 Harness / Skill / 评估方法调研",
+    "subtitle": "全网最先进表格 Agent 调研·16 来源逐字原文·三流派 grader·对 某表格 Agent 产品 线上评估双档拆分建议",
+    "date": "2026-10-15",
+    "tags": [
+      "调研",
+      "全网取证"
+    ],
+    "source": "arXiv x8 + GitHub/MS/Anthropic 文档",
+    "topic": "表格智能体",
+    "cover": "",
+    "path": "zxy-ss-eval/"
+  },
+  {
+    "slug": "zxy-ssb2-eval",
+    "title": "SpreadsheetBench v2 评估方法调研",
+    "subtitle": "逐函数还原评分链路·论文vs代码差异·4处不一致·8个复现坑·对某表格 Agent 产品线上评估的启示",
+    "date": "2026-10-14",
+    "tags": [
+      "调研",
+      "评测复现"
+    ],
+    "source": "arXiv:2606.29955v1 + code 5842db8",
+    "topic": "表格智能体",
+    "cover": "",
+    "path": "zxy-ssb2-eval/"
+  },
+  {
+    "slug": "zxy-tcod",
+    "title": "TCOD 精读：多轮智能体的时序课程在线蒸馏",
+    "subtitle": "F2B/B2F 救回 OPD 的轨迹级KL失稳 + 结合9个GitHub issue的勘误与复现指南",
+    "date": "2026-10-10",
+    "tags": [
+      "水分 4/10",
+      "价值 8/10"
+    ],
+    "source": "arXiv:2604.24005v3",
+    "topic": "模型训练",
+    "cover": "assets/covers/zxy-tcod.png",
+    "path": "zxy-tcod/"
+  },
+  {
+    "slug": "zxy-ssb2",
+    "title": "SpreadsheetBench 2：工作流级电子表格 Agent 基准",
+    "subtitle": "生成/调试/可视化三类·321题·最强模型总体Acc仅34.89%·附六问速答",
+    "date": "2026-10-09",
+    "tags": [
+      "水分 2/10",
+      "价值 8.5/10"
+    ],
+    "source": "arXiv:2606.29955v1",
+    "topic": "表格智能体",
+    "cover": "assets/covers/zxy-ssb2.png",
+    "path": "zxy-ssb2/"
+  },
+  {
+    "slug": "zxy-mai",
+    "title": "MAI-Thinking-1 分块精读",
+    "subtitle": "从零训练前沿推理 MoE 的全流程工程手册（含消融/结论/工程细节）",
+    "date": "2026-10-08",
+    "tags": [
+      "透明度 8/10",
+      "工程价值 9/10",
+      "分块精读"
+    ],
+    "source": "Microsoft AI 技术报告",
+    "topic": "模型训练",
+    "cover": "assets/covers/zxy-mai.png",
+    "path": "zxy-mai/"
+  },
+  {
+    "slug": "zxy-finch",
+    "title": "FINCH / FinWorkBench 精读",
+    "subtitle": "真实企业财会工作流基准：乱·长链路·知识密集·多模态；最强 Agent 也只过 38.4%",
+    "date": "2026-10-08",
+    "tags": [
+      "水分 3/10",
+      "价值 8/10"
+    ],
+    "source": "arXiv:2512.13168v5",
+    "topic": "智能体与代码",
+    "cover": "assets/covers/zxy-finch.png",
+    "path": "zxy-finch/"
+  },
+  {
+    "slug": "zxy-dnmopd",
+    "title": "DN-MOPD 精读报告",
+    "subtitle": "多教师在线蒸馏的按领域反馈归一化 (w_d=clip(σ_all/σ_d,0.25,4))",
+    "date": "2026-10-07",
+    "tags": [
+      "水分 2/10",
+      "价值 7/10",
+      "可复现 高"
+    ],
+    "source": "arXiv 2609.35347",
+    "topic": "模型训练",
+    "cover": "assets/covers/zxy-dnmopd.png",
+    "path": "zxy-dnmopd/"
+  },
+  {
+    "slug": "zxy-pprds",
+    "title": "MOPD-Router 精读报告",
+    "subtitle": "多教师在线策略蒸馏中的 token 级教师路由 (ExpertAlign)",
+    "date": "2026-09-29",
+    "tags": [
+      "水分 3/10",
+      "价值 8/10",
+      "可复现 高"
+    ],
+    "source": "arXiv 2609.30837",
+    "topic": "模型训练",
+    "cover": "assets/covers/zxy-pprds.png",
+    "path": "zxy-pprds/"
+  },
+  {
+    "slug": "zxy-hidden-cot",
+    "title": "Hidden CoT 精读报告",
+    "subtitle": "抽取并刻画前沿模型的隐藏思维链 (FORCED-REASONING)",
+    "date": "2026-09-29",
+    "tags": [
+      "水分 5/10",
+      "价值 7/10",
+      "可复现 中"
+    ],
+    "source": "arXiv 2609.26637",
+    "topic": "推理与解释",
+    "cover": "assets/covers/zxy-hidden-cot.png",
+    "path": "zxy-hidden-cot/"
+  }
+]

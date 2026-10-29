@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SpreadsheetBench v2 评估方法调研</title>
+<style>
+:root{--bg:#0f1115;--card:#171a21;--card2:#1d212b;--bd:#2a2f3a;--fg:#e6e9ef;--mut:#9aa3b2;--ac:#5b9bd5;--ok:#70ad47;--warn:#ffc000;--bad:#ed6a5a;--code:#c0b7ff}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.75 -apple-system,"PingFang SC","Microsoft YaHei",Segoe UI,Roboto,sans-serif}
+.wrap{max-width:960px;margin:0 auto;padding:40px 22px 90px}
+h1{font-size:27px;margin:0 0 6px;letter-spacing:.3px}
+h2{font-size:20px;margin:42px 0 12px;padding-left:11px;border-left:4px solid var(--ac)}
+h3{font-size:16px;margin:24px 0 8px;color:#cfd6e4}
+.sub{color:var(--mut);font-size:13.5px;margin-bottom:22px}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:12px;padding:18px 20px;margin:16px 0}
+.tldr{background:linear-gradient(135deg,#1a2230,#171a21);border:1px solid #33405a}
+.tldr b{color:var(--ac)}
+code,.mono{font-family:"JetBrains Mono",Consolas,monospace;font-size:12.5px;color:var(--code)}
+.cite{color:var(--mut);font-size:12px;font-family:"JetBrains Mono",monospace}
+table{width:100%;border-collapse:collapse;margin:10px 0;font-size:13px}
+th,td{border:1px solid var(--bd);padding:9px 10px;text-align:left;vertical-align:top}
+th{background:var(--card2);color:#cfd6e4;font-weight:600}
+td code{font-size:11.5px}
+.pill{display:inline-block;padding:1px 8px;border-radius:20px;font-size:11px;margin:1px 3px 1px 0}
+.p-ok{background:#1e3a1a;color:#9fe08a}.p-warn{background:#3a3312;color:#ffd95b}.p-bad{background:#3a1c1a;color:#ff9c8f}.p-ac{background:#152a3f;color:#8fc4f0}
+ol.pit{counter-reset:p;list-style:none;padding:0}
+ol.pit>li{background:var(--card);border:1px solid var(--bd);border-left:3px solid var(--warn);border-radius:9px;padding:12px 15px 12px 46px;margin:9px 0;position:relative}
+ol.pit>li:before{counter-increment:p;content:counter(p);position:absolute;left:13px;top:12px;width:22px;height:22px;background:var(--warn);color:#1a1a1a;border-radius:50%;text-align:center;font-weight:700;font-size:12px;line-height:22px}
+.k{color:var(--warn);font-weight:600}.g{color:var(--ok)}.r{color:var(--bad)}
+.flow{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:8px 0;font-size:12.5px}
+.flow span{background:var(--card2);border:1px solid var(--bd);border-radius:7px;padding:5px 9px}
+.flow i{color:var(--ac);font-style:normal}
+blockquote{margin:10px 0;padding:9px 14px;border-left:3px solid var(--ac);background:#141821;color:#cfd6e4;border-radius:0 8px 8px 0}
+a{color:var(--ac)}
+.note{color:var(--mut);font-size:12.5px}
+hr{border:0;border-top:1px solid var(--bd);margin:30px 0}
+</style>
+</head>
+<body>
+<div class="wrap">
+<h1>SpreadsheetBench v2 评估方法调研</h1>
+<div class="sub">从全局到局部还原评分链路（论文表述 vs 代码实现）· 一手资料核查 · 本轮不提交整基准评测<br>
+依据：论文 arXiv:2606.29955v1（2026-06-29）· 代码 commit <code>5842db8</code>（2026-10-08）· 查阅日期 2026-10-14</div>
+<div class="card tldr">
+<h3 style="margin-top:0">V2 到底怎样评分（≤150字速答）</h3>
+<p>两条独立链路。<b>非可视化</b>（Financial_Model / Template / Debugging）：比对 agent 输出与 golden，<b>仅在 <code>answer_position</code> 圈定的单元格</b>内逐格比，数值走 1% 容差、公式比串、颜色比 RGB；每题拆成"该改的格(modification)"与"不该动的格(regression)"两组命中率；<b>任务级 Accuracy 全有或全无</b>（两组都满分才记 1）。<b>可视化</b>：Windows 上用 Excel/WPS COM 把图导成 PNG，交 VLM(glm-4.6v) 按专家 rubric 逐条判 PASS/FAIL，<b>每题分=通过条目占比（连续）</b>。总分=各题分按类别求平均。</p>
+</div>
+
+<h2>一、四类别判分对照表</h2>
+<table>
+<thead><tr><th>类别（代码目录）</th><th>agent 输入</th><th>输出</th><th>判分方法</th><th>报告指标</th></tr></thead>
+<tbody>
+<tr><td><b>Financial_Model</b><br><span class="note">论文归入 generation</span></td><td>instruction + 只读输入 xlsx</td><td><code>{id}_output.xlsx</code></td><td>逐格比对 output vs golden，限 <code>answer_position</code> 范围，1% 数值容差</td><td>Modif.（连续）+ Acc.（0/1）</td></tr>
+<tr><td><b>Template</b><br><span class="note">论文归入 generation</span></td><td>同上</td><td>同上</td><td>同上</td><td>Modif. + Acc.</td></tr>
+<tr><td><b>Debugging</b></td><td>同上</td><td>同上</td><td>同上；按路径启用子模式：<span class="pill p-ac">Color→比字体色</span><span class="pill p-ac">Embedded→比公式</span></td><td>Modif. + Acc.</td></tr>
+<tr><td><b>Visualization</b></td><td>instruction + 输入 xlsx（env：openpyxl/xlsxwriter，只做图表/透视表）</td><td>含图表的 xlsx</td><td>COM 导 PNG → VLM 对 rubric 判 PASS/FAIL（两维：Data Correctness / Format Compliance）</td><td>Acc.=平均 rubric 通过率（连续）</td></tr>
+</tbody>
+</table>
+<p class="cite">论文 §2.4 L310-331 · Table 3 L327-348 · README L27-32 · evaluation.py L431-436 · spreadsheet.yaml / visualisation.yaml</p>
+<h2>二、复现最易犯的 8 个错误</h2>
+<ol class="pit">
+<li><span class="k">数据根路径错位。</span>agent 读 <code>data/spreadsheetbench-v2/&lt;Cat&gt;</code>（README L85），但 <code>evaluation.py</code> 读 <code>&lt;root&gt;/data/&lt;Cat&gt;</code>（L13-14,473，少一层）。<b>后果：</b>照 README 直接跑评测 FileNotFound。<b>核查：</b>把 dataset 同时放到 <code>data/&lt;Cat&gt;</code> 或改 <code>--dataset</code> 路径。</li>
+<li><span class="k">忘了刷新缓存值。</span>openpyxl 以 <code>data_only=True</code> 读缓存（L362），公式格若未经 LibreOffice 重算则读成 <code>None</code>。<b>后果：</b>公式题几乎全判错、分数虚低。<b>核查：</b>产出后必跑 <code>open_spreadsheet.py --dir_path</code>。</li>
+<li><span class="k">以为 answer_position 之外也算分。</span>只有 <code>answer_position</code> 圈定的格参与判分（L378-401）。<b>后果：</b>误判"改坏了别处也会扣分"。<b>核查：</b>读 dataset.json 的 answer_position 字段确认范围。</li>
+<li><span class="k">把 Accuracy 当连续分。</span>任务级 Acc 全有或全无——reg 与 mod 两组都满分才 1（L458）。<b>后果：</b>错报平均。<b>核查：</b>Modif. 才是连续、Acc 是 0/1 任务占比。</li>
+<li><span class="k">把可视化 Acc 当"过 70% 任务比例"。</span>Table 3 的 Viz Acc = 平均 rubric 通过率（caption L329-331），代码里 <code>&gt;0.7</code> 的二值 acc 是另一个数、不在论文正表。<b>后果：</b>口径张冠李戴。<b>核查：</b>报 <code>all_task_avg_score</code>，不是 <code>acc</code>。</li>
+<li><span class="k">忽略 99.8% regression 阈值与容差。</span>reg_ratio≥0.998 视作满分（L456）、数值 1% 容差（L38-102）、<code>#DIV/0!≡N/A</code> 等价。<b>后果：</b>误以为"严格逐格完全一致"。<b>核查：</b>读 compare_cell_value。</li>
+<li><span class="k">interaction_turns 静默记 0。</span>只有 outputs 目录路径含 <code>/output_excel/</code> 才会去 <code>/spreadsheet/</code> 找 <code>.traj</code>（L482）。<b>后果：</b>轮数统计全 0。<b>核查：</b>按约定命名输出目录。</li>
+<li><span class="k">在 Linux 上跑可视化评测。</span>导图依赖 Windows <code>win32com</code> + Excel/WPS，判分依赖 VLM API key（L53-57）。<b>后果：</b>无图/全 0。<b>核查：</b>可视化半必须 Windows + glm-4.6v key。</li>
+</ol>
+<h2>三、整体链路（全局 → 局部）</h2>
+<div class="flow">
+<span>dataset.json</span><i>→</i><span>只读挂载输入 xlsx</span><i>→</i><span>agent (bash/view_xlsx/submit, ≤50 turns)</span><i>→</i><span>{id}_output.xlsx</span><i>→</i><span>LibreOffice 重算缓存</span><i>→</i><span>evaluation.py / run_visual_vlm</span><i>→</i><span>report.json</span>
+</div>
+<p>评分从一份 <code>dataset.json</code> 契约开始：每题含 <code>id / instruction / spreadsheet_path / golden_response_path</code>（README L38-41），非可视化题还强依赖一个 README 未列全的字段 <code>answer_position</code>（evaluation.py L442）——它用 <code>'Sheet'!A1:K52</code> 形式圈定"参与判分的单元格范围"，可逗号分隔多段。agent 只拿到 instruction + 只读的输入 xlsx，用三个工具（bash / view_xlsx / submit；config 文案误写 four tools）在 50 轮内产出 <code>{id}_output.xlsx</code>。<b>产出后必须先用 LibreOffice headless 重算</b>（open_spreadsheet.py，UNO 端口 2002，calculateAll 后存回 L112-209），否则 openpyxl 以 <code>data_only=True</code> 读缓存会把未重算的公式格读成 <code>None</code>（evaluation.py L362），公式题全判错。最后非可视化走 <code>evaluation.py</code>、可视化走 <code>run_visual_vlm_checklist_eval.py</code>，各自吐出 report.json。</p>
+
+<h2>四、非可视化判分（代码逐步还原 + 论文 vs 代码）</h2>
+<div class="card">
+<p><b>五步链路（evaluation.py）：</b></p>
+<p><span class="k">①定位</span> <code>parse_answer_position</code>(L188) 把 <code>answer_position</code> 拆成 <code>Sheet!Range</code> 段，<code>generate_cell_names</code>(L242) 展开成每一个具体单元格名。</p>
+<p><span class="k">②分组</span> <code>classify_cells_by_modification</code>(L282) 比对 <b>input vs golden</b>：相同的格 = <b>regression（不该动）</b>，不同的格 = <b>modification（该改）</b>。这一步决定了"改对了多少"和"有没有误伤别处"两组指标。</p>
+<p><span class="k">③比对</span> <code>compare_cell_value</code>(L38) 比 <b>output vs golden</b>：数值走 1% 相对容差（<code>tolerance=0.01</code>，一端为 0 用绝对误差，值先 <code>round(2)</code>）；公式比串但忽略 <code>$</code>/大小写/<code>=+</code> 前缀（L91,L171）；日期转 Excel 浮点；<code>None≈0≈''</code>；<code>#DIV/0!≡N/A</code> 等 not-meaningful 值互相等价。</p>
+<p><span class="k">④特判</span> 仅 Debugging 按路径触发（L431-436）：路径含 <code>Color</code> → <code>with_font_color</code>（比值 + 字体 RGB 末 6 位，主题色解析 L106）；含 <code>Embedded</code> → <code>with_formula</code>（比公式串）。</p>
+<p><span class="k">⑤判题</span> <code>reg_ratio=reg对/reg总</code>、<code>mod_ratio=mod对/mod总</code>（L453）；<code>reg_ratio≥0.998</code> 视作 1.0（L456）；<b>accuracy=1.0 当且仅当 reg==1.0 且 mod==1.0，否则 0</b>（L458）——任务级全有或全无。</p>
+</div>
+<p><b>聚合（L549-561）：</b><code>modification_accuracy</code> = 各题 <code>mod_ratio</code> 均值（<b>排除</b> output 缺失题）；<code>accuracy</code> = 各题 0/1 均值（<b>含</b>缺失题计 0，分母 = 全部题）。所以 Modif. 是连续分、Acc 是 0/1 任务占比，两者分母还不一样。</p>
+<blockquote><b>论文 vs 代码的关键差异：</b>论文 §2.4 L315-321 说 Accuracy 是"every cell match"（逐格完全匹配才记 1）。代码里的"match"实为 <b>1% 容差 + 99.8% regression 阈值 + not-meaningful 等价 + 公式/颜色子模式</b>。口头念"完全一致"会误导——它并不严格逐格字节相等。</blockquote>
+<p><b>实测验证</b>（<code>[本地脚本路径]</code>，合成工作簿）：gold=100 时 out=100.5 通过 / out=102 失败（1% 边界）；regression 格被改动→即便 mod 满分，Acc 仍=0；reg 500/501=0.998→记满分；<code>#DIV/0!≡N/A</code>→通过。全部与代码推断一致。</p>
+<p><b>论文附录真实例：</b>Case1 Debugging，Modif=0.8974 但 H48（gold 1094.14 / agent 1259.34）未全中 → Acc=0（L1292）；Case3 Financial Modeling，公式 <code>=(F95+F90)/F103</code> vs gold <code>=F90/F103</code>，L37 算得 0.4591 vs 0.2265，Modif=0.8824（L1358）。</p>
+
+<h2>五、可视化判分（三个"分数"切勿混淆）</h2>
+<p>可视化走 <code>run_visual_vlm_checklist_eval.py</code>：① <code>ChartExporter</code> 用 <code>win32com</code>（Excel/WPS COM，<code>DispatchEx</code> L281）把 xlsx 里每个 ChartObject 导成 PNG（L350），多图拼接（L456）——<b>必须 Windows</b>（<code>WIN32COM_AVAILABLE</code> L53-57，本 Linux 环境不可运行）。② VLM（<code>glm-4.6v</code>）按 system prompt 对每条 criterion 判 PASS/FAIL（L598-612），分两维：<b>Data Correctness</b> + <b>Format Compliance</b>（论文 L1149-1155）。③ 单题 <code>final_score = passed_items / total_expected</code>（L723）——通过条目占比，连续 [0,1]。</p>
+<div class="card">
+<p><b>三个数，不要张冠李戴：</b></p>
+<table>
+<thead><tr><th>名称</th><th>来源</th><th>含义</th><th>Claude 值</th></tr></thead>
+<tbody>
+<tr><td><code>all_task_avg_score</code></td><td>build_summary L1325</td><td>平均 rubric 通过率（连续）<b>= 论文 Table 3 的 Viz "Acc."</b>（caption L329-331 "average rubric pass rate"）</td><td class="g">62.50</td></tr>
+<tr><td><code>acc</code>（&gt;0.7 二值）</td><td>compute_acc_from_score L196</td><td><code>1 if score&gt;0.7 else 0</code> 的任务占比（<code>DEFAULT_ACC_THRESHOLD=0.7</code> L72），<b>不在论文正表</b></td><td class="note">另一个数</td></tr>
+<tr><td>Figure 11 Overall</td><td>论文 L1164</td><td>两维加权总分，<b>≠</b> Table 3 的 62.50</td><td class="note">76.2</td></tr>
+</tbody>
+</table>
+<p class="note">实测 <code>compute_acc_from_score</code>：0.70→0、0.7001→1（严格大于）。报告请引 <code>all_task_avg_score</code>，不是 <code>acc</code>。</p>
+</div>
+
+<h2>六、异常/缺失如何计分</h2>
+<p>两条链路都是"缺失=0 分且计入分母，不跳过、不中断"。非可视化：output 不存在→<code>missing=True</code>（L354,444），该题 Acc=0 计入 <code>acc_scores</code> 分母（L553），但其 reg/mod_ratio 从 Modif. 均值分母剔除（L551-552）；openpyxl 打开异常或 worker 崩→stats 全 0→Acc=0（L446-450,536-543）。可视化：图缺失/VLM 报错/导不出图→<code>{'error', score 0}</code>（L579,632），<code>build_summary</code> note 明示（L1385）"Missing/skipped/unfinished 一律 score=0、acc=0 计入 total_tasks"。真实例 Case6：sunburst 用 XML 注入生成→评测报 "no chart objects" → 整题 0（L1403）。
+
+<h2>七、对 某表格 Agent 产品 线上 query 评估的启示</h2>
+<p>SSB-v2 把评分拆成两档，这个二分法可直接套到 某表格 Agent 产品：<b>(I) 可确定判定</b>（非可视化）= golden 定位 target cells + <code>answer_position</code> 限范围 + 容差/等价 + 任务级判定；<b>(II) 不可规则化</b>（可视化）= 专家 rubric + VLM 二值 PASS/FAIL + 连续通过率。</p>
+<div class="card">
+<p><b>可直接迁移：</b></p>
+<p>(a) <b>锚点式 golden</b>——不比整份输出，像 <code>answer_position</code> 一样只圈定"必须正确的判定锚点"（关键字段/结论/数值）。线上 query 蒸馏时顺手标注这些锚点，即可做确定性判分。</p>
+<p>(b) <b>回归位保护</b>——像 regression cells 一样校验"不该改的地方没被改"（线上 = 用户原数据/上下文没被破坏）。</p>
+<p>(c) <b>容差与等价类</b>（1% / <code>#DIV0!≡N/A</code>）——对应 某表格 Agent 产品 答案的近似等价归一。</p>
+<p>(d) <b>开放/多模态输出走 rubric + LLM/VLM-judge</b>，报连续通过率而非只报二值。</p>
+</div>
+<div class="card">
+<p><b>需改造 / 不适用：</b></p>
+<p>(1) SSB 有<b>唯一 golden 文件</b>，线上 query 多为开放答案、无单一标准解——须先把 query 分成"可判定"（有唯一锚点）与"开放"（走 rubric）两档。</p>
+<p>(2) <b>任务级全有或全无过严</b>，某表格 Agent 产品 更适合 modification 式连续分 + 分维度 rubric。</p>
+<p>(3) <code>&gt;0.7</code> 二值阈值是人为设定，迁移前须用标注集校准。</p>
+<p>(4) <b>VLM-judge 有噪声</b>（论文 L826 自承 rubric 噪声），需人审校准。</p>
+</div>
+<blockquote><b>改造样例：</b>线上 query『把这张销售表按区域做个柱状图并算出各区域同比』→拆成 (i) 确定性档：'各区域同比'写入指定单元格，用 answer_position + 1% 容差自动判分；(ii) rubric 档：'柱状图'走 checklist（图表类型=柱状 / 坐标轴标签 / 区域齐全 / 数值正确），VLM 判 PASS/FAIL 出连续分。<b>落地：</b>复用 <code>evaluation.py</code> 的 cell 比对内核做确定性档，复用 <code>run_visual_...</code> 的 checklist+VLM 内核做开放档，两档分别产出"精确率（连续）"与"通过率（连续）+ 校准二值"。</blockquote>
+
+<h2>八、四条防误读边界</h2>
+<ol class="pit" style="counter-reset:p">
+<li><span class="k">规模与分类。</span>V2 = <b>321 任务</b>（均值 11.8 工作表、593.5 单元格修改）。论文三大类 generation / debugging / visualization，代码/数据四目录 Template / Financial_Model / Debugging / Visualization（generation = {FM, Template}）。<b>禁止引用 V1</b>（912 题）——V2 无此口径。各类精确任务数需 dataset.json 实测【待确认，本环境无外网未下载】。</li>
+<li><span class="k">"every cell match" ≠ 字节相等。</span>论文说逐格匹配，代码实为 1% 容差 + 99.8% regression 阈值 + not-meaningful 等价 + 公式/颜色模式。</li>
+<li><span class="k">Viz Acc 是连续通过率。</span>Table 3 的 Viz "Acc."= 平均 rubric 通过率（<code>all_task_avg_score</code>），不是 <code>&gt;0.7</code> 二值 acc，也不是 Figure 11 的 76.2。</li>
+<li><span class="k">复现前处理三件套。</span>先用 open_spreadsheet 重算 input+golden（README L25）→ agent 产出后再 LibreOffice 刷新缓存 → 可视化半需 Windows + COM + VLM key，缺一不可。</li>
+</ol>
+
+<h2>九、附录</h2>
+<h3>A. 复现命令</h3>
+<div class="card mono" style="font-size:12px;white-space:pre-wrap">
+# 1. 产出前：重算 input + golden 缓存（README L25）
+python evaluation/open_spreadsheet.py --dir_path &lt;input_or_golden_dir&gt;
+
+# 2. agent 产出后：刷新 output 缓存值（LibreOffice headless UNO:2002）
+python evaluation/open_spreadsheet.py --dir_path &lt;outputs_dir&gt;
+
+# 3a. 非可视化评测（Linux 可跑）
+python evaluation/evaluation.py --model &lt;name&gt; --dataset &lt;Category&gt; \
+    --outputs-dir &lt;.../output_excel/&gt; --workers &lt;N&gt;
+
+# 3b. 可视化评测（必须 Windows + Excel/WPS COM + glm-4.6v key）
+python evaluation/run_visual_vlm_checklist_eval.py ...
+</div>
+<h3>B. 关键 file:line 速查</h3>
+<table>
+<thead><tr><th>锚点</th><th>位置</th></tr></thead>
+<tbody>
+<tr><td>数值 1% 容差 / #DIV0!≡N/A</td><td><code>evaluation.py:38-102</code></td></tr>
+<tr><td>公式串比对（忽略 $/大小写/=+）</td><td><code>evaluation.py:91,171</code></td></tr>
+<tr><td>reg/mod 分组</td><td><code>evaluation.py:282</code></td></tr>
+<tr><td>data_only=True 读缓存</td><td><code>evaluation.py:362</code></td></tr>
+<tr><td>answer_position 限定判分范围</td><td><code>evaluation.py:378-401,442</code></td></tr>
+<tr><td>Debugging 子模式（Color/Embedded）</td><td><code>evaluation.py:431-436</code></td></tr>
+<tr><td>99.8% 阈值 + 任务级 0/1</td><td><code>evaluation.py:456,458</code></td></tr>
+<tr><td>聚合（两分母不同）</td><td><code>evaluation.py:549-561</code></td></tr>
+<tr><td>interaction_turns 依赖 /output_excel/</td><td><code>evaluation.py:482</code></td></tr>
+<tr><td>LibreOffice 重算（只处理 *output.xlsx）</td><td><code>open_spreadsheet.py:112-209,329,333</code></td></tr>
+<tr><td>win32com 导图 / VLM 判分</td><td><code>run_visual_...:53-57,281,350,598-612</code></td></tr>
+<tr><td>viz 单题分 / &gt;0.7 二值 / 聚合</td><td><code>run_visual_...:72,196,723,1325</code></td></tr>
+</tbody>
+</table>
+<h3>C. 实查到的 4 处 README/论文/代码不一致</h3>
+<table>
+<thead><tr><th>#</th><th>矛盾</th><th>判断</th></tr></thead>
+<tbody>
+<tr><td>1</td><td>README L25 要求用 open_spreadsheet 重算 input+golden，但该脚本只处理 <code>endswith("output.xlsx")</code>（L329,333），input/golden 若不叫 *output.xlsx 则被跳过</td><td class="r">【待确认】HF 是否预重算 / golden 命名另议</td></tr>
+<tr><td>2</td><td>evaluation.py 读 <code>&lt;root&gt;/data/&lt;Cat&gt;</code>（L13-14,473），agent/viz 用 <code>data/spreadsheetbench-v2/&lt;Cat&gt;</code>（README L85,146），少一层</td><td class="r">【易错】照 README 直跑评测会 FileNotFound，需手动对齐</td></tr>
+<tr><td>3</td><td>interaction_turns 依赖 outputs 路径含 <code>/output_excel/</code>（L482），否则静默记 0</td><td class="warn">代码隐式约定，README 未写明</td></tr>
+<tr><td>4</td><td>spreadsheet.yaml L16 文案 "four tools"，实列 bash/view_xlsx/submit 三个（论文 L372 亦三工具）</td><td class="note">文案笔误，不影响评分</td></tr>
+</tbody>
+</table>
+
+<h2>十、下一步：评测我自己的 agent</h2>
+<p>第一步，把线上 query 分成"可判定档"（标注锚点单元格 + 回归位 + 容差规则，直接复用 <code>evaluation.py</code> 的 cell 比对内核做自动判分）与"开放档"（写两维 rubric，复用 <code>run_visual_...</code> 的 checklist+VLM 内核）。第二步，先在一小批带人工标注的 query 上校准 VLM-judge 与 <code>&gt;0.7</code> 阈值，确认 judge 噪声可控再放量。第三步，报告时坚持"连续分（Modif./通过率）为主、二值 Acc 为辅"的双口径，避免把 SSB 论文那种"全有或全无 Accuracy"的过严口径直接搬到开放答案场景。</p>
+
+<p class="cite" style="margin-top:28px">依据：论文 arXiv:2606.29955v1 · 代码 commit 5842db8 · 本轮无外网未下载 benchmark，真实例取自论文附录，非可视化判分经 [本地脚本路径] 合成验证，可视化半需 Windows + glm-4.6v key 另行验证。</p>
+
+</div>
+<a class="report-home" href="../" aria-label="返回论文目录">← 返回论文目录</a></body>
+</html>
